@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ΔF/F Calculator — background & photobleaching correction</title>
+<style>
+  :root{
+    --bg:#f7f7f5; --panel:#ffffff; --ink:#1d1d1f; --muted:#6b6b70; --line:#dedee3;
+    --accent:#2f5d8a; --accent-ink:#ffffff; --warn:#a1452b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{margin:0;font-size:19px;font-weight:650}
+  header p{margin:4px 0 0;color:var(--muted)}
+  main{display:grid;grid-template-columns:minmax(330px,420px) 1fr;gap:18px;padding:18px 24px;align-items:start}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px;font-weight:650}
+  label{display:block;margin:8px 0 3px;font-weight:550}
+  .hint{color:var(--muted);font-size:12px;font-weight:400}
+  textarea{width:100%;height:130px;font:12px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:6px;padding:6px;resize:vertical}
+  input[type=number],input[type=text],select{border:1px solid var(--line);border-radius:6px;padding:4px 6px;font:inherit;background:#fff}
+  input[type=number]{width:90px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .row > label{margin:0;font-weight:500}
+  .radio{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0}
+  .radio label{font-weight:400;margin:0;display:flex;gap:5px;align-items:center}
+  button{font:inherit;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:6px 12px;border-radius:6px;cursor:pointer}
+  button.ghost{background:#fff;color:var(--accent)}
+  button:disabled{opacity:.45;cursor:default}
+  .buttons{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .msg{margin-top:8px;font-size:12.5px}
+  .msg.err{color:var(--warn)}
+  .plotbox{width:100%;overflow:hidden}
+  svg.plot{width:100%;height:auto;display:block;background:#fff}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:middle}
+  th{color:var(--muted);font-weight:600}
+  td.num{font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .swatches{display:flex;gap:3px}
+  .sw{width:18px;height:18px;border-radius:4px;border:2px solid transparent;cursor:pointer;padding:0}
+  .sw.on{border-color:#1d1d1f}
+  details summary{cursor:pointer;color:var(--accent);font-weight:550}
+  .formula{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:#f2f2ef;border-radius:6px;padding:8px;white-space:pre-wrap}
+  footer{padding:0 24px 24px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>ΔF/F Calculator</h1>
+  <p>Background subtraction → photobleaching correction → fractional change (ΔF/F<sub>0</sub>) → plot &amp; export. Everything runs in your browser and no data is uploaded.</p>
+</header>
+
+<main>
+<div>
+  <!-- ============ INPUT ============ -->
+  <section>
+    <h2>1 · Fluorescence F(t)</h2>
+    <label>Paste F(t) <span class="hint">: one column per trace/ROI, copied from Excel, Prism, or ImageJ. An optional header row gives the trace names.</span></label>
+    <textarea id="fText" spellcheck="false" placeholder="Time	ROI1	ROI2&#10;0	1520	1310&#10;0.1	1517	1308&#10;..."></textarea>
+    <div class="radio" style="margin-top:6px">
+      <label><input type="radio" name="timeMode" value="col" checked> First column is time</label>
+      <label><input type="radio" name="timeMode" value="interval"> No time column; frame interval =
+        <input type="number" id="dt" value="0.1" step="any" min="0" style="width:70px"> s</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Background fluorescence F<sub>bg</sub>(t)</h2>
+    <label>Paste background <span class="hint">: same layout as F(t). Use one background column (applied to all traces) or one per trace. Leave empty to skip.</span></label>
+    <textarea id="bgText" spellcheck="false" placeholder="Time	BG&#10;0	402&#10;0.1	401&#10;..."></textarea>
+    <div class="radio" style="margin-top:6px">
+      <label><input type="radio" name="bgTimeMode" value="col" checked> First column is time</label>
+      <label><input type="radio" name="bgTimeMode" value="none"> Background values only (no time column)</label>
+    </div>
+    <p class="hint" style="margin:2px 0 0">If the background times differ from the F(t) times, the background is linearly interpolated onto the F(t) time points.</p>
+    <div style="margin-top:8px;padding:8px 10px;background:#eef3f8;border-radius:6px;font-size:12.5px">
+      <b>Where to draw the background ROI:</b> on a <b>dark, cell-free area</b> near your ROI, in the same image and over the same frames. <b>Not on a cell</b>: a fluorescent cell bleaches, and that fading would be carried into your trace.
+      A good background trace is nearly flat. If yours clearly decreases over time, it contains fluorescence, so move the ROI.
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label>…or a constant background:</label>
+      <input type="number" id="bgConst" step="any" placeholder="e.g. 400">
+    </div>
+  </section>
+
+  <section>
+    <h2>Photobleaching trend</h2>
+    <p class="hint" style="margin:0 0 6px">Updates as you paste. Check two things: the <b>background</b> should be nearly flat, and <b>F − bg</b> should decline smoothly. The dashed line is the bleach fit, shown after you click Calculate.</p>
+    <div class="row" style="margin-bottom:6px">
+      <label>Trace</label><select id="trendSel"></select>
+    </div>
+    <div class="plotbox"><svg class="plot" id="plotTrend" viewBox="0 0 520 380"></svg></div>
+    <div class="msg" id="trendMsg"></div>
+  </section>
+
+  <section>
+    <h2>3 · Photobleaching correction</h2>
+    <div class="radio">
+      <label><input type="radio" name="bleachModel" value="linear" checked> Linear fit (slope)</label>
+      <label><input type="radio" name="bleachModel" value="exp"> Mono-exponential</label>
+      <label><input type="radio" name="bleachModel" value="none"> None</label>
+    </div>
+    <label>Fit window <span class="hint">: the frames used to fit the bleaching trend. These should be frames with no stimulus. Frame numbers start at 1; leave "to" empty for the last frame.</span></label>
+    <div class="row">
+      <label>from frame</label><input type="number" id="fitFrom" value="1" min="1" step="1">
+      <label>to</label><input type="number" id="fitTo" min="1" step="1" placeholder="last">
+    </div>
+    <label>Correction method</label>
+    <div class="radio">
+      <label><input type="radio" name="bleachApply" value="subtract" checked> Subtract trend</label>
+      <label><input type="radio" name="bleachApply" value="divide"> Divide by trend</label>
+    </div>
+  </section>
+
+  <section>
+    <h2>4 · F<sub>0</sub> &amp; normalization</h2>
+    <div class="radio">
+      <label><input type="radio" name="f0Mode" value="auto" checked> Mean of baseline frames</label>
+      <label><input type="radio" name="f0Mode" value="manual"> <span>Enter F<sub>0</sub> manually</span></label>
+    </div>
+    <div class="row" id="f0AutoRow">
+      <label>baseline frames</label><input type="number" id="f0From" value="1" min="1" step="1">
+      <label>to</label><input type="number" id="f0To" value="10" min="1" step="1">
+    </div>
+    <div class="row" id="f0ManualRow" style="display:none">
+      <label>F<sub>0</sub> =</label><input type="number" id="f0Manual" step="any" style="width:120px">
+      <span class="hint">(after background subtraction; applied to all traces)</span>
+    </div>
+    <label>Output</label>
+    <div class="radio">
+      <label><input type="radio" name="units" value="pct" checked> <span>ΔF/F<sub>0</sub> (%)</span></label>
+      <label><input type="radio" name="units" value="frac"> <span>ΔF/F<sub>0</sub> (fraction)</span></label>
+    </div>
+    <p class="hint" style="margin:2px 0 0">Both show the same change, written two ways. <b>Fraction</b> = (F − F<sub>0</sub>)/F<sub>0</sub>; <b>%</b> = fraction × 100.
+      Example: F<sub>0</sub> = 1000 and F drops to 950 → fraction = −0.05, % = −5. Choose whichever your figures or field normally use.</p>
+    <div class="radio">
+      <label><input type="checkbox" id="invert"> Invert sign (−ΔF/F, e.g. for ASAP-family GEVIs)</label>
+    </div>
+    <div class="buttons">
+      <button id="runBtn">Calculate &amp; plot</button>
+      <button class="ghost" id="exampleBtn">Load example data</button>
+      <button class="ghost" id="clearBtn">Clear</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </section>
+
+  <section>
+    <details>
+      <summary>What the calculation does</summary>
+      <div class="formula" style="margin-top:8px">1. Background:   F<sub>c</sub>(t) = F(t) − F<sub>bg</sub>(t)
+
+2. Bleach fit on F<sub>c</sub> over the fit window
+   linear:       B(t) = a + b·t        (b = bleaching slope)
+   exponential:  B(t) = A·exp(−t/τ)    (log-linear fit)
+
+3. Correction
+   subtract:     F<sub>corr</sub>(t) = F<sub>c</sub>(t) − [B(t) − B(t<sub>1</sub>)]
+   divide:       F<sub>corr</sub>(t) = F<sub>c</sub>(t) · B(t<sub>1</sub>) / B(t)
+
+4. F<sub>0</sub> = mean F<sub>corr</sub> over baseline frames (or the value you enter)
+
+5. ΔF/F<sub>0</sub>(t) = [F<sub>corr</sub>(t) − F<sub>0</sub>] / F<sub>0</sub>   (×100 for %)</div>
+    </details>
+  </section>
+</div>
+
+<div>
+  <!-- ============ OUTPUT ============ -->
+  <section>
+    <h2>Fractional change over time</h2>
+    <div class="row" style="margin-bottom:8px">
+      <label>Line thickness</label>
+      <input type="range" id="lw" min="0.5" max="6" step="0.25" value="1.5">
+      <span id="lwVal" class="hint">1.5 px</span>
+      <label style="margin-left:12px">Title</label>
+      <input type="text" id="plotTitle" placeholder="(optional)" style="width:160px">
+      <label><input type="checkbox" id="showZero" checked> zero line</label>
+    </div>
+    <div class="plotbox"><svg class="plot" id="plotMain" viewBox="0 0 800 440"></svg></div>
+    <div class="buttons">
+      <button class="ghost" id="exportCsv" disabled>Export data (CSV)</button>
+      <button class="ghost" id="exportSummary" disabled>Export summary (CSV)</button>
+      <button class="ghost" id="exportSvg" disabled>Save graph (SVG)</button>
+      <button class="ghost" id="exportPng" disabled>Save graph (PNG)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Traces: color, visibility &amp; bleaching parameters</h2>
+    <div id="traceTable"><p class="hint">Results appear here after you calculate.</p></div>
+  </section>
+
+  <section>
+    <h2>Quality check: background-subtracted F and the bleach fit</h2>
+    <div class="row" style="margin-bottom:8px">
+      <label>Trace</label><select id="qcSel"></select>
+    </div>
+    <div class="plotbox"><svg class="plot" id="plotQC" viewBox="0 0 800 320"></svg></div>
+  </section>
+</div>
+</main>
+<footer>ΔF/F Calculator · MIT License · runs entirely client-side</footer>
+
+<script>
+"use strict";
+/* =====================================================================
+   PURE MATH (no DOM). Exposed on window.DFF for testing.
+   ===================================================================== */
+const DFF = (() => {
+
+  function isNum(s){ return s !== "" && s != null && isFinite(Number(s)); }
+
+  /** Parse pasted tabular text (tab / comma / semicolon / whitespace separated). */
+  function parseTable(text){
+    const lines = text.replace(/\r/g,"").split("\n").map(l => l.trim()).filter(l => l.length);
+    if (!lines.length) return {header:null, cols:[]};
+    const split = l => (l.includes("\t") ? l.split("\t")
+                      : l.includes(";") ? l.split(";")
+                      : l.includes(",") ? l.split(",")
+                      : l.split(/\s+/)).map(s => s.trim());
+    let rows = lines.map(split);
+    let header = null;
+    if (rows[0].some(c => c !== "" && !isNum(c))) { header = rows[0]; rows = rows.slice(1); }
+    const nCol = Math.max(...rows.map(r => r.length), header ? header.length : 0);
+    const cols = Array.from({length:nCol}, () => []);
+    for (const r of rows) for (let j=0;j<nCol;j++) cols[j].push(isNum(r[j]) ? Number(r[j]) : NaN);
+    // drop columns that are entirely empty
+    const keep = cols.map(c => c.some(v => !isNaN(v)));
+    return {
+      header: header ? header.filter((_,j)=>keep[j]) : null,
+      cols: cols.filter((_,j)=>keep[j])
+    };
+  }
+
+  function linFit(x, y){
+    let n=0,sx=0,sy=0,sxx=0,sxy=0;
+    for (let i=0;i<x.length;i++){
+      if (!isFinite(x[i]) || !isFinite(y[i])) continue;
+      n++; sx+=x[i]; sy+=y[i]; sxx+=x[i]*x[i]; sxy+=x[i]*y[i];
+    }
+    if (n < 2) return null;
+    const d = n*sxx - sx*sx;
+    if (d === 0) return null;
+    const slope = (n*sxy - sx*sy)/d;
+    const intercept = (sy - slope*sx)/n;
+    // R²
+    const my = sy/n; let ssr=0, sst=0;
+    for (let i=0;i<x.length;i++){
+      if (!isFinite(x[i]) || !isFinite(y[i])) continue;
+      const f = intercept + slope*x[i];
+      ssr += (y[i]-f)**2; sst += (y[i]-my)**2;
+    }
+    return {slope, intercept, r2: sst>0 ? 1-ssr/sst : 1, n};
+  }
+
+  function mean(a){ let s=0,n=0; for (const v of a) if (isFinite(v)){s+=v;n++;} return n? s/n : NaN; }
+
+  /**
+   * Process one trace.
+   * t, F, bg: arrays of equal length (bg may be null)
+   * opts: {model:'linear'|'exp'|'none', apply:'subtract'|'divide',
+   *        fitFrom, fitTo (0-based inclusive), f0Mode:'auto'|'manual',
+   *        f0From, f0To (0-based inclusive), f0Manual, percent:bool, invert:bool}
+   */
+  function processTrace(t, F, bg, opts){
+    const N = F.length;
+    const Fc = F.map((v,i) => v - (bg ? bg[i] : 0));
+    const a = Math.max(0, opts.fitFrom), b = Math.min(N-1, opts.fitTo);
+    const tw = t.slice(a,b+1), yw = Fc.slice(a,b+1);
+    let fit = null, trend = Fc.map(() => NaN), params = {model:opts.model};
+
+    if (opts.model === "linear"){
+      fit = linFit(tw, yw);
+      if (!fit) throw new Error("Bleach fit failed: the fit window needs at least 2 valid points.");
+      trend = t.map(x => fit.intercept + fit.slope*x);
+      params = {model:"linear", slope:fit.slope, intercept:fit.intercept, r2:fit.r2,
+                pctPerUnitTime: 100*fit.slope/(fit.intercept + fit.slope*t[0])};
+    } else if (opts.model === "exp"){
+      const ly = yw.map(v => v > 0 ? Math.log(v) : NaN);
+      fit = linFit(tw, ly);
+      if (!fit) throw new Error("Exponential fit failed: F − background must be > 0 in the fit window.");
+      const A = Math.exp(fit.intercept), k = -fit.slope;
+      trend = t.map(x => A*Math.exp(-k*x));
+      params = {model:"exp", A, k, tau: k !== 0 ? 1/k : Infinity, r2_log:fit.r2,
+                slope: -k*A*Math.exp(-k*t[0])};   // instantaneous slope at t1
+    }
+
+    let Fcorr;
+    if (opts.model === "none") Fcorr = Fc.slice();
+    else {
+      const B0 = trend[0];
+      Fcorr = opts.apply === "divide"
+        ? Fc.map((v,i) => v * B0 / trend[i])
+        : Fc.map((v,i) => v - (trend[i] - B0));
+    }
+
+    let F0;
+    if (opts.f0Mode === "manual") F0 = opts.f0Manual;
+    else {
+      const s = Math.max(0, opts.f0From), e = Math.min(N-1, opts.f0To);
+      F0 = mean(Fcorr.slice(s, e+1));
+    }
+    if (!isFinite(F0) || F0 === 0) throw new Error("F0 is zero or undefined. Check the baseline frames or the F0 value.");
+    if (F0 < 0) params.warning = "F0 is negative: the background is larger than the signal.";
+
+    const sign = opts.invert ? -1 : 1, scale = opts.percent ? 100 : 1;
+    const dff = Fcorr.map(v => sign*scale*(v - F0)/F0);
+    return {Fc, trend, Fcorr, F0, dff, params};
+  }
+
+  /** Linear interpolation of (xs, ys) onto xq. NaN outside the range of xs. */
+  function interp(xs, ys, xq){
+    const pts = xs.map((x,i)=>[x,ys[i]]).filter(p => isFinite(p[0]) && isFinite(p[1])).sort((a,b)=>a[0]-b[0]);
+    return xq.map(x => {
+      if (!pts.length || x < pts[0][0] - 1e-9 || x > pts[pts.length-1][0] + 1e-9) return NaN;
+      let lo = 0, hi = pts.length - 1;
+      while (hi - lo > 1){ const m = (lo+hi)>>1; if (pts[m][0] <= x) lo = m; else hi = m; }
+      const [x0,y0] = pts[lo], [x1,y1] = pts[hi];
+      return x1 === x0 ? y0 : y0 + (y1-y0)*(x-x0)/(x1-x0);
+    });
+  }
+
+  return {parseTable, linFit, mean, processTrace, interp};
+})();
+window.DFF = DFF;
+
+/* =====================================================================
+   PLOTTING (hand-rolled SVG, no dependencies)
+   ===================================================================== */
+const PALETTE = [
+  {name:"Black",  hex:"#000000"},
+  {name:"Blue",   hex:"#0072B2"},
+  {name:"Orange", hex:"#E69F00"},
+  {name:"Green",  hex:"#009E73"},
+  {name:"Vermilion", hex:"#D55E00"},
+  {name:"Sky",    hex:"#56B4E9"},
+  {name:"Purple", hex:"#7B3294"},
+  {name:"Magenta",hex:"#CC79A7"},
+  {name:"Gold",   hex:"#C9A400"},
+  {name:"Gray",   hex:"#808080"}
+];
+
+function niceTicks(lo, hi, n=6){
+  if (!isFinite(lo) || !isFinite(hi)) return [0,1];
+  if (lo === hi){ lo -= 1; hi += 1; }
+  const span = hi - lo, step0 = span / n;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const err = step0 / mag;
+  const step = (err >= 7.5 ? 10 : err >= 3.5 ? 5 : err >= 1.5 ? 2 : 1) * mag;
+  const start = Math.ceil(lo/step - 1e-9)*step, ticks = [];
+  for (let v=start; v<=hi + step*1e-9; v+=step) ticks.push(Math.abs(v) < step*1e-9 ? 0 : v);
+  return {ticks, step};
+}
+function fmt(v, step){
+  const d = Math.max(0, -Math.floor(Math.log10(step)+1e-9));
+  return v.toFixed(Math.min(d, 6));
+}
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+/**
+ * series: [{x:[], y:[], color, width, name, dash}]
+ */
+function drawPlot(svg, series, o){
+  const W = o.W || 800, H = o.H || 440;
+  const fs = o.fs || 1, top = o.legend === "top";
+  const m = {l:72*fs, r: (o.legend && !top) ? 150 : 24, t: (o.title ? 38 : 16) + (top ? 26*fs : 0), b:52*fs};
+  const pw = W - m.l - m.r, ph = H - m.t - m.b;
+  let xmin=Infinity,xmax=-Infinity,ymin=Infinity,ymax=-Infinity;
+  for (const s of series) for (let i=0;i<s.x.length;i++){
+    if (!isFinite(s.x[i]) || !isFinite(s.y[i])) continue;
+    xmin=Math.min(xmin,s.x[i]); xmax=Math.max(xmax,s.x[i]);
+    ymin=Math.min(ymin,s.y[i]); ymax=Math.max(ymax,s.y[i]);
+  }
+  if (!isFinite(xmin)){ svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" fill="#888" font-size="${14*fs}" font-family="Helvetica, Arial, sans-serif">No data to plot</text>`; return; }
+  const pad = (ymax-ymin)*0.06 || 1; ymin -= pad; ymax += pad;
+  const xt = niceTicks(xmin, xmax, 7), yt = niceTicks(ymin, ymax, 6);
+  const X = v => m.l + (v - xmin)/(xmax - xmin || 1)*pw;
+  const Y = v => m.t + ph - (v - ymin)/(ymax - ymin)*ph;
+  const F = 'font-family="Helvetica, Arial, sans-serif"';
+  let g = `<rect x="0" y="0" width="${W}" height="${H}" fill="#ffffff"/>`;
+  if (o.title) g += `<text x="${m.l + pw/2}" y="24" text-anchor="middle" font-size="16" font-weight="600" ${F}>${esc(o.title)}</text>`;
+  // ticks
+  for (const v of xt.ticks){ if (v < xmin-1e-12 || v > xmax+1e-12) continue;
+    g += `<line x1="${X(v)}" x2="${X(v)}" y1="${m.t+ph}" y2="${m.t+ph+5}" stroke="#000"/>`+
+         `<text x="${X(v)}" y="${m.t+ph+19*fs}" text-anchor="middle" font-size="${12*fs}" ${F}>${fmt(v,xt.step)}</text>`; }
+  for (const v of yt.ticks){ if (v < ymin || v > ymax) continue;
+    g += `<line x1="${m.l-5}" x2="${m.l}" y1="${Y(v)}" y2="${Y(v)}" stroke="#000"/>`+
+         `<text x="${m.l-8}" y="${Y(v)+4}" text-anchor="end" font-size="${12*fs}" ${F}>${fmt(v,yt.step)}</text>`; }
+  if (o.zero && ymin < 0 && ymax > 0)
+    g += `<line x1="${m.l}" x2="${m.l+pw}" y1="${Y(0)}" y2="${Y(0)}" stroke="#999" stroke-dasharray="4 4" stroke-width="1"/>`;
+  // clip + data
+  const cid = "clip" + Math.random().toString(36).slice(2,8);
+  g += `<defs><clipPath id="${cid}"><rect x="${m.l}" y="${m.t}" width="${pw}" height="${ph}"/></clipPath></defs><g clip-path="url(#${cid})">`;
+  for (const s of series){
+    let d = "", pen = false;
+    for (let i=0;i<s.x.length;i++){
+      if (!isFinite(s.x[i]) || !isFinite(s.y[i])){ pen=false; continue; }
+      d += (pen ? "L" : "M") + X(s.x[i]).toFixed(2) + "," + Y(s.y[i]).toFixed(2); pen = true;
+    }
+    g += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width}" stroke-linejoin="round" stroke-linecap="round"${s.dash?` stroke-dasharray="${s.dash}"`:""}/>`;
+  }
+  g += `</g>`;
+  // axes
+  g += `<line x1="${m.l}" x2="${m.l}" y1="${m.t}" y2="${m.t+ph}" stroke="#000" stroke-width="1.2"/>`+
+       `<line x1="${m.l}" x2="${m.l+pw}" y1="${m.t+ph}" y2="${m.t+ph}" stroke="#000" stroke-width="1.2"/>`;
+  g += `<text x="${m.l+pw/2}" y="${H-12}" text-anchor="middle" font-size="${14*fs}" ${F}>${esc(o.xlabel||"")}</text>`;
+  g += `<text transform="translate(${18*fs} ${m.t+ph/2}) rotate(-90)" text-anchor="middle" font-size="${14*fs}" ${F}>${esc(o.ylabel||"")}</text>`;
+  // legend
+  if (top){
+    let lx = m.l, ly = (o.title ? 38 : 16) + 6*fs;
+    for (const s of series){
+      g += `<line x1="${lx}" x2="${lx+22}" y1="${ly}" y2="${ly}" stroke="${s.color}" stroke-width="${Math.max(2,s.width)}"${s.dash?` stroke-dasharray="${s.dash}"`:""}/>`+
+           `<text x="${lx+27}" y="${ly+4*fs}" font-size="${12*fs}" ${F}>${esc(s.name)}</text>`;
+      lx += 27 + (s.name.length*6.6 + 18)*fs;
+    }
+  } else if (o.legend){
+    let ly = m.t + 6;
+    for (const s of series){
+      g += `<line x1="${m.l+pw+14}" x2="${m.l+pw+38}" y1="${ly}" y2="${ly}" stroke="${s.color}" stroke-width="${Math.max(2,s.width)}"${s.dash?` stroke-dasharray="${s.dash}"`:""}/>`+
+           `<text x="${m.l+pw+44}" y="${ly+4}" font-size="${12*fs}" ${F}>${esc(s.name)}</text>`;
+      ly += 20;
+    }
+  }
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  svg.innerHTML = g;
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const radio = name => document.querySelector(`input[name="${name}"]:checked`).value;
+let STATE = null;   // {t, names, traces:[{name,F,bg,res,color,visible}], opts}
+
+function setMsg(text, err=false){ const m=$("msg"); m.textContent=text; m.className = "msg" + (err?" err":""); }
+
+document.querySelectorAll('input[name="f0Mode"]').forEach(r => r.addEventListener("change", () => {
+  const man = radio("f0Mode") === "manual";
+  $("f0ManualRow").style.display = man ? "" : "none";
+  $("f0AutoRow").style.display = man ? "none" : "";
+}));
+
+function run(){
+  try{
+    const fT = DFF.parseTable($("fText").value);
+    if (!fT.cols.length) throw new Error("Paste your F(t) data first.");
+    const timeMode = radio("timeMode");
+    let t, Fcols, names;
+    if (timeMode === "col"){
+      if (fT.cols.length < 2) throw new Error("Found only one column. Add a time column and at least one F column, or pick 'No time column'.");
+      t = fT.cols[0]; Fcols = fT.cols.slice(1);
+      names = fT.header ? fT.header.slice(1) : Fcols.map((_,i)=>`Trace ${i+1}`);
+    } else {
+      const dt = Number($("dt").value);
+      if (!(dt > 0)) throw new Error("The frame interval must be greater than 0.");
+      Fcols = fT.cols; t = Fcols[0].map((_,i)=>i*dt);
+      names = fT.header ? fT.header.slice() : Fcols.map((_,i)=>`Trace ${i+1}`);
+    }
+    const N = t.length;
+    names = names.map((n,i) => n || `Trace ${i+1}`);
+
+    // background
+    let bgCols = null;
+    const bgT = DFF.parseTable($("bgText").value);
+    const bgConstStr = $("bgConst").value.trim();
+    if (bgT.cols.length){
+      if (radio("bgTimeMode") === "col"){
+        if (bgT.cols.length < 2) throw new Error("Background has only one column. Add a time column and a background column, or pick 'Background values only'.");
+        const bt = bgT.cols[0];
+        bgCols = bgT.cols.slice(1);
+        const sameTimes = bt.length === N && bt.every((v,i) => Math.abs(v - t[i]) <= 1e-9*Math.max(1,Math.abs(t[i])));
+        if (!sameTimes) bgCols = bgCols.map(c => DFF.interp(bt, c, t));
+      } else {
+        bgCols = bgT.cols;
+        for (const c of bgCols) if (c.length !== N)
+          throw new Error(`Background has ${c.length} rows but F(t) has ${N}. Match them frame for frame, or include a time column.`);
+      }
+      if (bgCols.length !== 1 && bgCols.length !== Fcols.length)
+        throw new Error(`Background has ${bgCols.length} value columns. Use 1 (applied to all traces) or ${Fcols.length} (one per trace).`);
+      if (bgCols.some(c => c.some(v => !isFinite(v))))
+        throw new Error("Some background values are missing, or the background does not cover the full F(t) time range.");
+    } else if (bgConstStr !== ""){
+      const c = Number(bgConstStr); if (!isFinite(c)) throw new Error("The constant background is not a number.");
+      bgCols = [t.map(()=>c)];
+    }
+
+    const toIdx = (v, dflt) => (v === "" || v == null) ? dflt : Math.round(Number(v)) - 1;
+    const opts = {
+      model: radio("bleachModel"), apply: radio("bleachApply"),
+      fitFrom: toIdx($("fitFrom").value, 0), fitTo: toIdx($("fitTo").value, N-1),
+      f0Mode: radio("f0Mode"),
+      f0From: toIdx($("f0From").value, 0), f0To: toIdx($("f0To").value, 9),
+      f0Manual: Number($("f0Manual").value),
+      percent: radio("units") === "pct", invert: $("invert").checked
+    };
+    if (opts.fitTo < opts.fitFrom) throw new Error("In the fit window, 'to' must not be before 'from'.");
+    if (opts.f0Mode === "auto" && opts.f0To < opts.f0From) throw new Error("In the baseline frames, 'to' must not be before 'from'.");
+    if (opts.f0Mode === "manual" && !isFinite(opts.f0Manual)) throw new Error("Enter a value for F0.");
+
+    const prev = STATE ? STATE.traces : [];
+    const warnings = [];
+    const traces = Fcols.map((F,j) => {
+      if (F.length !== N) throw new Error(`Column "${names[j]}" has a different number of rows.`);
+      const bg = bgCols ? (bgCols.length === 1 ? bgCols[0] : bgCols[j]) : null;
+      const res = DFF.processTrace(t, F, bg, opts);
+      if (res.params.warning) warnings.push(`${names[j]}: ${res.params.warning}`);
+      const old = prev[j];
+      return {name:names[j], F, bg, res,
+              color: old ? old.color : PALETTE[j % PALETTE.length].hex,
+              visible: old ? old.visible : true};
+    });
+    STATE = {t, traces, opts, timeMode};
+    renderAll();
+    ["exportCsv","exportSummary","exportSvg","exportPng"].forEach(id => $(id).disabled = false);
+    setMsg(`Processed ${traces.length} trace(s) × ${N} frames.` + (warnings.length ? " Warning: " + warnings.join(" ") : ""), warnings.length>0);
+  } catch(e){
+    setMsg(e.message, true);
+  }
+}
+
+function yLabel(){
+  const o = STATE.opts;
+  return (o.invert ? "−" : "") + "ΔF/F₀" + (o.percent ? " (%)" : "");
+}
+function xLabel(){ return STATE.timeMode === "col" ? "Time" : "Time (s)"; }
+
+function renderMain(){
+  if (!STATE) return;
+  const lw = Number($("lw").value);
+  const series = STATE.traces.filter(tr => tr.visible).map(tr => ({
+    x: STATE.t, y: tr.res.dff, color: tr.color, width: lw, name: tr.name
+  }));
+  drawPlot($("plotMain"), series, {
+    W:800, H:440, xlabel:xLabel(), ylabel:yLabel(),
+    title: $("plotTitle").value.trim(), legend: series.length > 1, zero: $("showZero").checked
+  });
+}
+
+function renderQC(){
+  if (!STATE) return;
+  const j = Number($("qcSel").value) || 0, tr = STATE.traces[j];
+  const s = [{x:STATE.t, y:tr.res.Fc, color:"#555555", width:1.2, name:"F − bg"}];
+  if (STATE.opts.model !== "none"){
+    s.push({x:STATE.t, y:tr.res.Fcorr, color:tr.color, width:1.2, name:"bleach-corrected"});
+    s.push({x:STATE.t, y:tr.res.trend, color:"#D55E00", width:2, name:"bleach fit", dash:"6 4"});
+  }
+  drawPlot($("plotQC"), s, {W:800, H:320, xlabel:xLabel(), ylabel:"Fluorescence (a.u.)", legend:true});
+}
+
+function renderTable(){
+  const o = STATE.opts;
+  const sel = $("qcSel"), keep = sel.value;
+  sel.innerHTML = STATE.traces.map((tr,j)=>`<option value="${j}">${esc(tr.name)}</option>`).join("");
+  sel.value = keep && keep < STATE.traces.length ? keep : "0";
+
+  const pcol = o.model === "linear" ? "<th>Slope (a.u./time)</th><th>Bleach %/time</th><th>R²</th>"
+             : o.model === "exp" ? "<th>τ (time)</th><th>Initial slope</th><th>R² (log)</th>" : "";
+  let h = `<table><thead><tr><th>Show</th><th>Trace</th><th>Color</th>${pcol}<th>F₀</th></tr></thead><tbody>`;
+  STATE.traces.forEach((tr,j) => {
+    const p = tr.res.params;
+    const pv = o.model === "linear" ? `<td class="num">${p.slope.toPrecision(4)}</td><td class="num">${p.pctPerUnitTime.toFixed(3)}</td><td class="num">${p.r2.toFixed(3)}</td>`
+             : o.model === "exp" ? `<td class="num">${isFinite(p.tau)?p.tau.toPrecision(4):"∞"}</td><td class="num">${p.slope.toPrecision(4)}</td><td class="num">${p.r2_log.toFixed(3)}</td>` : "";
+    const sw = PALETTE.map(c => `<button class="sw${c.hex===tr.color?" on":""}" title="${c.name}" style="background:${c.hex}" data-j="${j}" data-c="${c.hex}"></button>`).join("");
+    h += `<tr><td><input type="checkbox" data-vis="${j}"${tr.visible?" checked":""}></td>
+          <td>${esc(tr.name)}</td><td><div class="swatches">${sw}</div></td>${pv}
+          <td class="num">${tr.res.F0.toPrecision(5)}</td></tr>`;
+  });
+  h += "</tbody></table>";
+  $("traceTable").innerHTML = h;
+  $("traceTable").querySelectorAll(".sw").forEach(b => b.addEventListener("click", () => {
+    STATE.traces[+b.dataset.j].color = b.dataset.c; renderTable(); renderMain(); renderQC();
+  }));
+  $("traceTable").querySelectorAll("[data-vis]").forEach(cb => cb.addEventListener("change", () => {
+    STATE.traces[+cb.dataset.vis].visible = cb.checked; renderMain();
+  }));
+}
+
+function renderAll(){ renderTable(); renderMain(); renderQC(); renderTrend(); }
+
+/* ---------- photobleaching-trend panel (works live, before Calculate) ---------- */
+function readInputsLoose(){
+  const fT = DFF.parseTable($("fText").value);
+  if (!fT.cols.length) return null;
+  let t, Fcols, names;
+  if (radio("timeMode") === "col"){
+    if (fT.cols.length < 2) return null;
+    t = fT.cols[0]; Fcols = fT.cols.slice(1); names = fT.header ? fT.header.slice(1) : null;
+  } else {
+    const dt = Number($("dt").value) || 1;
+    Fcols = fT.cols; t = Fcols[0].map((_,i)=>i*dt); names = fT.header ? fT.header.slice() : null;
+  }
+  names = Fcols.map((_,i) => (names && names[i]) || `Trace ${i+1}`);
+  let bgCols = null;
+  const bgT = DFF.parseTable($("bgText").value), c = $("bgConst").value.trim();
+  if (bgT.cols.length){
+    if (radio("bgTimeMode") === "col" && bgT.cols.length >= 2) bgCols = bgT.cols.slice(1).map(col => DFF.interp(bgT.cols[0], col, t));
+    else if (radio("bgTimeMode") === "none") bgCols = bgT.cols.map(col => t.map((_,i)=> i < col.length ? col[i] : NaN));
+  } else if (c !== "" && isFinite(Number(c))) bgCols = [t.map(()=>Number(c))];
+  return {t, Fcols, names, bgCols};
+}
+
+function renderTrend(){
+  const d = readInputsLoose(), svg = $("plotTrend"), msg = $("trendMsg"), sel = $("trendSel");
+  if (!d){ svg.innerHTML = ""; sel.innerHTML = ""; msg.textContent = ""; return; }
+  const keep = sel.value;
+  sel.innerHTML = d.names.map((n,j)=>`<option value="${j}">${esc(n)}</option>`).join("");
+  sel.value = keep && +keep < d.names.length ? keep : "0";
+  const j = +sel.value, F = d.Fcols[j];
+  const bg = d.bgCols ? (d.bgCols.length === 1 ? d.bgCols[0] : d.bgCols[j]) : null;
+  const series = [{x:d.t, y:F, color:"#000000", width:1.2, name:"raw F"}];
+  if (bg){
+    series.push({x:d.t, y:bg, color:"#0072B2", width:1.2, name:"background"});
+    series.push({x:d.t, y:F.map((v,i)=>v-bg[i]), color:"#808080", width:1.2, name:"F − bg"});
+  }
+  const fitted = STATE && !STATE.stale && STATE.traces[j] && STATE.opts.model !== "none" && STATE.t.length === d.t.length;
+  if (fitted) series.push({x:STATE.t, y:STATE.traces[j].res.trend, color:"#D55E00", width:2, name:"bleach fit", dash:"6 4"});
+  drawPlot(svg, series, {W:520, H:380, fs:1.3, xlabel:xLabel(), ylabel:"Fluorescence (a.u.)", legend:"top"});
+
+  // plain-language checks
+  const notes = []; let warn = false;
+  const pct = (y) => {               // % change across the recording, from a straight-line fit
+    const f = DFF.linFit(d.t, y); if (!f) return NaN;
+    const y0 = f.intercept + f.slope*d.t[0], y1 = f.intercept + f.slope*d.t[d.t.length-1];
+    return 100*(y1 - y0)/y0;
+  };
+  if (bg){
+    const pb = pct(bg);
+    if (isFinite(pb)){
+      if (Math.abs(pb) > 5){ warn = true;
+        notes.push(`Background changes by ${pb.toFixed(1)}% over the recording. It should be nearly flat, so it probably contains fluorescence. Move the background ROI to a dark, cell-free area.`); }
+      else notes.push(`Background is flat (${pb.toFixed(1)}% change). Good.`);
+    }
+    const ps = pct(F.map((v,i)=>v-bg[i]));
+    if (isFinite(ps) && ps > 1){ warn = true;
+      notes.push(`F − bg rises by ${ps.toFixed(1)}% instead of declining. Check the background ROI, or make sure the fit window excludes responses.`); }
+    else if (isFinite(ps)) notes.push(`F − bg changes by ${ps.toFixed(1)}% over the recording (photobleaching).`);
+  } else notes.push("No background entered. Paste one in section 2 to see it here.");
+  if (fitted){
+    const p = STATE.traces[j].res.params;
+    if (p.model === "linear") notes.push(`Bleach slope: ${p.slope.toPrecision(3)} a.u./time (${p.pctPerUnitTime.toFixed(2)}% per time unit), R² = ${p.r2.toFixed(3)}.`);
+    else notes.push(`Bleach time constant τ = ${isFinite(p.tau) ? p.tau.toPrecision(3) : "∞"}, R² (log) = ${p.r2_log.toFixed(3)}.`);
+  }
+  if (STATE && STATE.stale) notes.push("Inputs changed. Click Calculate & plot to update the bleach fit.");
+  msg.innerHTML = notes.map(n => "• " + esc(n)).join("<br>");
+  msg.className = "msg" + (warn ? " err" : "");
+}
+let trendTimer = null;
+function scheduleTrend(){ if (STATE) STATE.stale = true; clearTimeout(trendTimer); trendTimer = setTimeout(renderTrend, 300); }
+["fText","bgText","bgConst","dt"].forEach(id => $(id).addEventListener("input", scheduleTrend));
+document.querySelectorAll('input[name="timeMode"],input[name="bgTimeMode"]').forEach(r => r.addEventListener("change", scheduleTrend));
+$("trendSel").addEventListener("change", renderTrend);
+
+/* ---------- export ---------- */
+// When running inside the Claude artifact viewer, use its download capability;
+// everywhere else (GitHub Pages, local file) fall back to a normal download link.
+let hostDownloads = null;
+if (window.claude && typeof window.claude.use === "function") {
+  window.claude.use("downloads").then(d => { hostDownloads = d; }).catch(() => {});
+}
+async function download(name, blob){
+  if (hostDownloads){
+    try { await hostDownloads.save({filename:name, data:blob}); setMsg(`Saved ${name}.`); }
+    catch(e){ if (e && e.code !== "declined") setMsg(`Could not save ${name}: ${e.message || e.code}`, true); }
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+const csvCell = v => typeof v === "number" ? (isFinite(v) ? String(v) : "") : `"${String(v).replace(/"/g,'""')}"`;
+
+function exportCsv(){
+  const o = STATE.opts, dl = (o.invert?"neg_":"") + "dF_F0" + (o.percent?"_pct":"");
+  const head = ["time"];
+  for (const tr of STATE.traces) head.push(`${tr.name}_F_raw`, `${tr.name}_bg`, `${tr.name}_F_minus_bg`,
+                                         `${tr.name}_bleach_fit`, `${tr.name}_F_corrected`, `${tr.name}_${dl}`);
+  const lines = [head.map(csvCell).join(",")];
+  for (let i=0;i<STATE.t.length;i++){
+    const r = [STATE.t[i]];
+    for (const tr of STATE.traces) r.push(tr.F[i], tr.bg ? tr.bg[i] : 0, tr.res.Fc[i], tr.res.trend[i], tr.res.Fcorr[i], tr.res.dff[i]);
+    lines.push(r.map(csvCell).join(","));
+  }
+  download("dFF_results.csv", new Blob([lines.join("\n")], {type:"text/csv"}));
+}
+
+function exportSummary(){
+  const o = STATE.opts;
+  const lines = [
+    `# Bleach model,${o.model}`, `# Correction,${o.model==="none"?"none":o.apply}`,
+    `# Fit window (frames),${o.fitFrom+1}-${o.fitTo+1}`,
+    `# F0 mode,${o.f0Mode==="manual"?"manual":"mean of frames "+(o.f0From+1)+"-"+(o.f0To+1)}`,
+    `# Output,${(o.invert?"-":"")+"dF/F0"}${o.percent?" (%)":" (fraction)"}`,
+    ["trace","F0","slope","intercept","R2","bleach_pct_per_time","tau","peak_dFF","min_dFF","mean_dFF"].join(",")
+  ];
+  for (const tr of STATE.traces){
+    const p = tr.res.params, d = tr.res.dff.filter(isFinite);
+    lines.push([tr.name, tr.res.F0, p.slope ?? "", p.intercept ?? (p.A ?? ""), p.r2 ?? (p.r2_log ?? ""),
+                p.pctPerUnitTime ?? "", p.tau ?? "", Math.max(...d), Math.min(...d), DFF.mean(d)].map(csvCell).join(","));
+  }
+  download("dFF_summary.csv", new Blob([lines.join("\n")], {type:"text/csv"}));
+}
+
+function svgString(){
+  const s = $("plotMain").cloneNode(true);
+  s.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  s.setAttribute("width","800"); s.setAttribute("height","440");
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(s);
+}
+function exportSvg(){ download("dFF_plot.svg", new Blob([svgString()], {type:"image/svg+xml"})); }
+function exportPng(){
+  const img = new Image(), scale = 3;
+  img.onload = () => {
+    const c = document.createElement("canvas"); c.width = 800*scale; c.height = 440*scale;
+    const ctx = c.getContext("2d"); ctx.fillStyle="#fff"; ctx.fillRect(0,0,c.width,c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    c.toBlob(b => download("dFF_plot.png", b), "image/png");
+  };
+  img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svgString());
+}
+
+/* ---------- example data ---------- */
+function loadExample(){
+  // 3 ROIs, 300 frames @ 10 Hz, linear bleaching, two step responses (GEVI-like dimming)
+  const n=300, dt=0.1, rows=["Time\tROI_1\tROI_2\tROI_3"], bg=["Time\tBackground"];
+  let seed = 7; const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647 - 0.5;
+  for (let i=0;i<n;i++){
+    const t=i*dt, b = 400 + 3*rnd()*2;
+    const stim = (t>=8 && t<12) ? 1 : (t>=20 && t<24) ? 1 : 0;
+    const r = [1500, 1250, 1800].map((F0s,k) => {
+      const bleach = F0s*(1 - 0.012*t);          // ~1.2 %/s bleaching
+      const resp = -stim*(0.08 + 0.03*k)*bleach; // dimming response
+      return (bleach + resp + b + 12*rnd()).toFixed(1);
+    });
+    rows.push([t.toFixed(2), ...r].join("\t")); bg.push(t.toFixed(2) + "\t" + b.toFixed(1));
+  }
+  $("fText").value = rows.join("\n"); $("bgText").value = bg.join("\n"); $("bgConst").value = "";
+  document.querySelector('input[name="timeMode"][value="col"]').checked = true;
+  document.querySelector('input[name="bgTimeMode"][value="col"]').checked = true;
+  $("fitFrom").value = 1; $("fitTo").value = 80;
+  $("f0From").value = 1; $("f0To").value = 50;
+  $("invert").checked = true;
+  run();
+}
+
+$("runBtn").addEventListener("click", run);
+$("exampleBtn").addEventListener("click", loadExample);
+$("clearBtn").addEventListener("click", () => {
+  $("fText").value = ""; $("bgText").value = ""; $("bgConst").value = "";
+  STATE = null; $("plotMain").innerHTML = ""; $("plotQC").innerHTML = ""; renderTrend();
+  $("traceTable").innerHTML = '<p class="hint">Results appear here after you calculate.</p>'; $("qcSel").innerHTML = "";
+  ["exportCsv","exportSummary","exportSvg","exportPng"].forEach(id => $(id).disabled = true); setMsg("");
+});
+$("lw").addEventListener("input", () => { $("lwVal").textContent = $("lw").value + " px"; renderMain(); });
+$("plotTitle").addEventListener("input", renderMain);
+$("showZero").addEventListener("change", renderMain);
+$("qcSel").addEventListener("change", renderQC);
+$("exportCsv").addEventListener("click", exportCsv);
+$("exportSummary").addEventListener("click", exportSummary);
+$("exportSvg").addEventListener("click", exportSvg);
+$("exportPng").addEventListener("click", exportPng);
+</script>
+</body>
+</html>
